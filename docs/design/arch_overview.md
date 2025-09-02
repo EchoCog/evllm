@@ -11,6 +11,55 @@ following diagram shows the relationship between them.
 
 ![Entrypoints Diagram](../assets/design/arch_overview/entrypoints.excalidraw.png)
 
+```mermaid
+graph TD
+    %% Users/Clients
+    User1[Python Developer<br/>Offline Inference]
+    User2[Application Developer<br/>Online Serving]
+    User3[API Consumer<br/>HTTP Requests]
+    
+    %% Entrypoints
+    subgraph "vLLM Entrypoints"
+        LLM_Class[vllm.LLM Class<br/>Direct Python API]
+        CLI_Serve[vllm serve command<br/>CLI Interface]
+        API_Server[API Server Module<br/>Direct Import]
+    end
+    
+    %% Internal Components
+    subgraph "Core Engine"
+        LLMEngine[LLMEngine<br/>Synchronous]
+        AsyncEngine[AsyncLLMEngine<br/>Asynchronous]
+    end
+    
+    subgraph "HTTP Servers"
+        OpenAI_Server[OpenAI Compatible API<br/>FastAPI Server]
+        Demo_Server[Demo API Server<br/>Simple HTTP]
+    end
+    
+    %% Connections
+    User1 --> LLM_Class
+    User2 --> CLI_Serve
+    User3 --> API_Server
+    
+    LLM_Class --> LLMEngine
+    CLI_Serve --> OpenAI_Server
+    API_Server --> Demo_Server
+    
+    OpenAI_Server --> AsyncEngine
+    Demo_Server --> AsyncEngine
+    
+    %% Styling
+    classDef user fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef entry fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef engine fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef server fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    
+    class User1,User2,User3 user
+    class LLM_Class,CLI_Serve,API_Server entry
+    class LLMEngine,AsyncEngine engine
+    class OpenAI_Server,Demo_Server server
+```
+
 ### LLM Class
 
 The LLM class provides the primary Python interface for doing offline inference,
@@ -80,6 +129,49 @@ the vLLM system, handling model inference and asynchronous request processing.
 
 ![LLMEngine Diagram](../assets/design/arch_overview/llm_engine.excalidraw.png)
 
+```mermaid
+graph LR
+    subgraph "Input Processing"
+        Request[Request] --> Tokenization[Tokenization]
+        Tokenization --> Validation[Input Validation]
+    end
+    
+    subgraph "LLMEngine Core"
+        Validation --> Engine{Engine Type}
+        Engine -->|Sync| SyncEngine[LLMEngine<br/>Synchronous Processing]
+        Engine -->|Async| AsyncEngine[AsyncLLMEngine<br/>Background Loop]
+    end
+    
+    subgraph "Internal Components"
+        SyncEngine --> Scheduler[Scheduler<br/>Request Management]
+        AsyncEngine --> Scheduler
+        
+        Scheduler --> ModelExecutor[Model Executor<br/>Distributed Execution]
+        ModelExecutor --> Workers[Worker Pool<br/>Multi-GPU/Multi-Node]
+    end
+    
+    subgraph "Output Processing"  
+        Workers --> OutputProcessor[Output Processing<br/>Detokenization]
+        OutputProcessor --> Response[Response]
+    end
+    
+    %% Direct connections for clarity
+    Scheduler <--> BlockManager[Block Manager<br/>Memory Management]
+    
+    %% Styling
+    classDef input fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef engine fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef internal fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef output fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef memory fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    
+    class Request,Tokenization,Validation input
+    class Engine,SyncEngine,AsyncEngine engine
+    class Scheduler,ModelExecutor,Workers internal
+    class OutputProcessor,Response output
+    class BlockManager memory
+```
+
 ### LLMEngine
 
 The `LLMEngine` class is the core component of the vLLM engine. It is
@@ -120,11 +212,99 @@ size 2, we will have 4 workers in total. Workers are identified by their
 `local_rank` is mainly used for assigning the accelerator device and accessing
 local resources such as the file system and shared memory.
 
+```mermaid
+graph TD
+    subgraph "Multi-GPU Setup Example"
+        subgraph "Node 1"
+            W1[Worker 1<br/>Rank 0, Local Rank 0<br/>GPU 0]
+            W2[Worker 2<br/>Rank 1, Local Rank 1<br/>GPU 1]
+        end
+        
+        subgraph "Node 2" 
+            W3[Worker 3<br/>Rank 2, Local Rank 0<br/>GPU 0]
+            W4[Worker 4<br/>Rank 3, Local Rank 1<br/>GPU 1]
+        end
+    end
+    
+    subgraph "Worker Responsibilities"
+        ModelLoad[Model Loading<br/>Per-device weights]
+        CacheInit[Cache Initialization<br/>KV cache blocks]
+        Execution[Model Execution<br/>Forward pass]
+        Communication[Inter-worker Communication<br/>Tensor/Pipeline Parallel]
+    end
+    
+    %% Worker connections
+    W1 --> ModelLoad
+    W2 --> CacheInit
+    W3 --> Execution
+    W4 --> Communication
+    
+    %% Inter-worker communication
+    W1 <--> W2
+    W3 <--> W4
+    W1 <-.-> W3
+    W2 <-.-> W4
+    
+    %% Styling
+    classDef worker fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef responsibility fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    
+    class W1,W2,W3,W4 worker
+    class ModelLoad,CacheInit,Execution,Communication responsibility
+```
+
 ## Model Runner
 
 Every worker has one model runner object, responsible for loading and running
 the model. Much of the model execution logic resides here, such as preparing
 input tensors and capturing cudagraphs.
+
+```mermaid
+graph TD
+    subgraph "Model Runner Components"
+        MR[Model Runner]
+        Model[PyTorch Model<br/>nn.Module]
+        CudaGraph[CUDA Graph<br/>Captured Execution]
+        InputPrep[Input Preparation<br/>Tensor Processing]
+        Profiler[Performance Profiler<br/>Memory/Latency]
+    end
+    
+    subgraph "Execution Flow"
+        Request[Execution Request] --> MR
+        MR --> InputPrep
+        InputPrep --> CudaGraph
+        CudaGraph --> Model
+        Model --> Output[Model Output]
+    end
+    
+    subgraph "Initialization"
+        LoadWeights[Load Model Weights]
+        InitCache[Initialize KV Cache]
+        WarmUp[Warmup Runs]
+        GraphCapture[CUDA Graph Capture]
+        
+        LoadWeights --> InitCache
+        InitCache --> WarmUp
+        WarmUp --> GraphCapture
+    end
+    
+    %% Connections
+    MR --> Model
+    MR --> CudaGraph
+    MR --> InputPrep
+    MR --> Profiler
+    
+    GraphCapture --> CudaGraph
+    
+    %% Styling
+    classDef component fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef execution fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef initialization fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    
+    class MR,Model,CudaGraph,InputPrep,Profiler component
+    class Request,Output execution
+    class LoadWeights,InitCache,WarmUp,GraphCapture initialization
+```
 
 ## Model
 
