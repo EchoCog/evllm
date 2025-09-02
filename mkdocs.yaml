@@ -108,7 +108,11 @@ markdown_extensions:
   - admonition
   - pymdownx.details
   # For content tabs
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
@@ -138,6 +142,8 @@ extra_css:
 extra_javascript:
   - mkdocs/javascript/run_llm_widget.js
   - https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_HTML
+  - https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js
+  - mkdocs/javascript/mermaid_config.js
   - mkdocs/javascript/edit_and_feedback.js
   - mkdocs/javascript/slack_and_forum.js
 
